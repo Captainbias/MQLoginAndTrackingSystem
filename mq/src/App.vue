@@ -169,7 +169,7 @@ import 'element-plus/es/components/message/style/css'
 const workers = ref([])
 const annualReview = ref({})
 
-const API_BASE = 'http://127.0.0.1:5000'  // <-- Backend base URL
+const API_BASE = 'https://captainbias.pythonanywhere.com/'  // <-- Backend base URL
 
 const timeOptions = []
 for (let hour = 0; hour < 24; hour++) {
