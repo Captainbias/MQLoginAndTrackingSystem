@@ -1,11 +1,9 @@
 {
   "compilerOptions": {
-    "lib": ["ESNext", "DOM"]
+    "lib": ["ESNext", "DOM"],
+    "strict": false,
+    "noImplicitAny": false,
+    "skipLibCheck": true
   },
-  "files": [],
-  "references": [
-    { "path": "./tsconfig.app.json" },
-    { "path": "./tsconfig.node.json" }
-  ],
   "include": ["vite-env.d.ts", "src"]
 }

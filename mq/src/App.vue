@@ -2,7 +2,7 @@
   <div>
     <h2>Attendance Records</h2>
     <el-form :model="form" @submit.native.prevent="submitEntry" label-width="120px" style="max-width: 400px;">
-      <!-- Names List -->
+      <!-- Names List --> 
       <el-form-item label="Names">
         <el-tag
           v-for="(n, index) in form.names"
@@ -94,7 +94,7 @@
           prop="paid"
           label="Paid"
           width="100"
-          :formatter="row => row.paid ? 'Yes' : 'No'"
+          :formatter="paidFormatter"
         />
         <el-table-column label="Actions" width="160">
           <template #default="{ row }">
@@ -157,6 +157,52 @@
   </div>
   <div>
     <h2>Past Records</h2>
+    <el-dialog v-model="editDialogVisible" title="Edit Attendance Entry" width="500px">
+      <el-form :model="editForm" label-width="140px">
+        <el-form-item label="Date">
+          <el-date-picker
+            v-model="editForm.date"
+            type="date"
+            format="YYYY-MM-DD"
+            
+            style="width: 100%;"
+          />
+        </el-form-item>
+
+        <el-form-item label="Login Time">
+          <el-time-picker
+            v-model="editForm.login_time"
+            format="HH:mm"
+            style="width: 100%;"
+          />
+        </el-form-item>
+
+        <el-form-item label="Logout Time">
+          <el-time-picker
+            v-model="editForm.logout_time"
+            format="HH:mm"
+            style="width: 100%;"
+          />
+        </el-form-item>
+
+        <el-form-item label="Hours Worked">
+          <el-input-number v-model="editForm.hours" :min="0" :step="0.5" style="width: 100%;" />
+        </el-form-item>
+
+        <el-form-item label="Overtime Hours">
+          <el-input-number v-model="editForm.overtime_hours" :min="0" :step="0.5" style="width: 100%;" />
+        </el-form-item>
+
+        <el-form-item label="Paid">
+          <el-switch v-model="editForm.paid" />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="editDialogVisible = false">Cancel</el-button>
+        <el-button type="primary" @click="saveEdit">Save</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -165,46 +211,55 @@ import { reactive,ref, onMounted,watch } from 'vue'
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import 'element-plus/es/components/message/style/css'
-
-const workers = ref([])
-const annualReview = ref({})
-
+// ===============================
+// CONSTANTS
+// ===============================
 const API_BASE = 'https://captainbias.pythonanywhere.com/'  // <-- Backend base URL
 
-const timeOptions = []
+const timeOptions: string[] = []
 for (let hour = 0; hour < 24; hour++) {
   const h = hour.toString().padStart(2, '0')
   timeOptions.push(`${h}:00`)
   timeOptions.push(`${h}:30`)
 }
-
-async function fetchWorkers() {
-  try {
-    const res = await fetch(`${API_BASE}/workers`)
-    if (!res.ok) throw new Error('Network error fetching workers')
-    workers.value = await res.json()
-    console.log('Workers loaded:', workers.value)
-  } catch (error) {
-    console.error(error)
-  }
+// ===============================
+// STATE VARIABLES
+// ===============================
+const workers = ref([])
+const annualReview = ref({})
+const unpaidByWorker = ref<Record<string, any[]>>({})// unpaidByWorker will be an object: { Alice: [], Bob: [], Charlie: [] }
+// Form state
+const form = reactive<{
+  names: string[]
+  date: Date
+  loginTime: string
+  logoutTime: string
+  paid: boolean
+  hours: number
+  overtime_hours: number
+}>({
+  names: [],
+  date: getTodayDateEST(),  // 这里必须是 Date 对象
+  loginTime: '',
+  logoutTime: '',
+  paid: false,
+  hours: 0,
+  overtime_hours: 0
+}) 
+// Input and UI state
+const nameInput = ref('')
+const message = ref('')
+const isError = ref(false)
+const editDialogVisible = ref(false)
+const pastPaid = ref<any>({})
+const editForm = ref<any>({})
+// ===============================
+// UTILITY FUNCTIONS
+// ===============================
+interface RowData {
+  paid: boolean
 }
-
-async function fetchAnnualReview(year) {
-  try {
-    const res = await fetch(`${API_BASE}/annual_review?year=${year}`)
-    if (!res.ok) throw new Error('Network error fetching annual review')
-    annualReview.value = await res.json()
-  } catch (error) {
-    console.error(error)
-  }
-}
-
-async function refreshAllData() {
-  await Promise.all([
-    fetchWorkers(),
-    fetchAnnualReview(new Date().getFullYear())
-  ])
-}
+const paidFormatter = (row: RowData) => row.paid ? 'Yes' : 'No'
 
 function getTodayDateEST() {
   const now = new Date()
@@ -213,33 +268,7 @@ function getTodayDateEST() {
   return new Date(utc + estOffset)
 }
 
-const form = reactive({
-  names: [],
-  date: getTodayDateEST(),  // 这里必须是 Date 对象
-  loginTime: '',
-  logoutTime: '',
-  paid: false,
-  hours: 0,
-  overtime_hours: 0
-})
-console.log(getTodayDateEST())
-
-const nameInput = ref('')
-const message = ref('')
-const isError = ref(false)
-
-function addName() {
-  const name = nameInput.value.trim()
-  console.log('Trying to add:', name)
-  if (name && !form.names.includes(name)) {
-    form.names.push(name)
-    console.log('Name added:', name)
-  }
-  nameInput.value = ''
-  console.log('Input cleared, current names:', form.names)
-}
-
-function calculateHours(loginTime, logoutTime) {
+function calculateHours(loginTime: Date, logoutTime: Date) {
   if (!loginTime || !logoutTime) return { hours: 0, overtime_hours: 0 }
   
   // 计算毫秒差
@@ -255,172 +284,6 @@ function calculateHours(loginTime, logoutTime) {
 
   return { hours, overtime_hours }
 }
-
-async function submitEntry() {
-  message.value = ''
-  isError.value = false
-
-  if (!form.date || !form.loginTime || !form.logoutTime || form.names.length === 0) {
-    message.value = 'Please fill out all fields and add at least one name.'
-    isError.value = true
-    return
-  }
-
-  const loginDateTime = `${form.loginTime}`
-  const logoutDateTime = `${form.logoutTime}`
-
-  let allSuccessful = true
-
-  for (const name of form.names) {
-    try {
-      const response = await fetch('http://127.0.0.1:5000/add_entry', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name,
-          date: form.date,
-          login_time: loginDateTime,
-          logout_time: logoutDateTime,
-          paid: form.paid,
-          hours: form.hours,
-          overtime_hours:form.overtime_hours
-        }),
-      })
-
-      const result = await response.json()
-      if (!response.ok) {
-        allSuccessful = false
-        console.error(`Error for ${name}:`, result.error || 'Failed to add entry')
-      }
-    } catch (err) {
-      allSuccessful = false
-      console.error(`Network error for ${name}:`, err.message)
-    }
-  }
-
-  if (allSuccessful) {
-    message.value = 'All entries added successfully!'
-    isError.value = false
-    form.names = []
-    form.date = getTodayDateEST()
-    form.loginTime = ''
-    form.logoutTime = ''
-    form.paid = false
-    nameInput.value = ''
-    refreshAllData()
-  } else {
-    message.value = 'Some entries failed to add. Check console for details.'
-    isError.value = true
-  }
-}
-
-// unpaidByWorker will be an object: { Alice: [], Bob: [], Charlie: [] }
-const unpaidByWorker = ref({})
-
-const fetchUnpaidForAll = async () => {
-  unpaidByWorker.value = {}
-
-  for (const worker of workers.value) {
-    console.log('Fetching unpaid for:', worker)
-    try {
-      const res = await axios.get(`${API_BASE}/attendance/unpaid?name=${encodeURIComponent(worker)}`)
-      console.log(`Response for ${worker}:`, res.data)
-      unpaidByWorker.value[worker] = res.data.sort(
-        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
-      )
-    } catch (err) {
-      console.error(`Error fetching unpaid for ${worker}:`, err)
-      unpaidByWorker.value[worker] = []
-    }
-  }
-}
-
-function summaryMethod({ columns, data }) {
-  const sums = []
-  columns.forEach((column, index) => {
-    if (index === 0) {
-      sums[index] = 'Total'
-      return
-    }
-    if (column.property === 'hours') {
-      sums[index] = data.reduce((sum, row) => sum + (row.hours || 0), 0).toFixed(1)
-    } else if (column.property === 'overtime_hours') {
-      sums[index] = data.reduce((sum, row) => sum + (row.overtime_hours || 0), 0).toFixed(1)
-    } else {
-      sums[index] = ''
-    }
-  })
-  return sums
-}
-
-async function deleteEntry(entryId: number) {
-  if (!confirm('Are you sure you want to delete this entry?')) return
-  try {
-    const res = await fetch(`${API_BASE}/delete_entry/${entryId}`, {
-      method: 'DELETE'
-    })
-    refreshAllData()
-    fetchUnpaidForAll() 
-    if (res.ok) {
-      // Find which worker has this entry
-      for (const worker in unpaidByWorker.value) {
-        const entries = unpaidByWorker.value[worker]
-        if (Array.isArray(entries)) {
-          unpaidByWorker.value[worker] = entries.filter(e => e.id !== entryId)
-        }
-      }
-      ElMessage.success('Entry deleted successfully')
-    } else {
-      ElMessage.error('Failed to delete entry')
-    }
-  } catch (err) {
-    console.error(err)
-    ElMessage.error('Error deleting entry')
-  }
-}
-
-const editDialogVisible = ref(false)
-const editForm = ref<any>({})
-
-// 辅助函数：字符串转 Date（时分）
-function timeStrToDate(str: string | undefined) {
-  if (!str) return null
-  const [h, m] = str.split(':').map(Number)
-  const d = new Date()
-  d.setHours(h, m, 0, 0)
-  return d
-}
-
-// 打开编辑时调用，确保时间字段是 Date 对象
-function openEdit(data: any) {
-  editForm.value = { ...data }
-  editForm.value.login_time = timeStrToDate(data.login_time)
-  editForm.value.logout_time = timeStrToDate(data.logout_time)
-  editDialogVisible.value = true
-}
-
-// 计算工时
-watch(
-  () => [editForm.value.login_time, editForm.value.logout_time],
-  ([loginTime, logoutTime]) => {
-    if (!loginTime || !logoutTime) {
-      editForm.value.hours = 0
-      editForm.value.overtime_hours = 0
-      return
-    }
-    const diffMs = logoutTime.getTime() - loginTime.getTime()
-    if (diffMs <= 0) {
-      editForm.value.hours = 0
-      editForm.value.overtime_hours = 0
-      return
-    }
-    const diffHours = diffMs / (1000 * 60 * 60)
-    const normalHours = Math.min(diffHours, 8)
-    const overtime = Math.max(diffHours - 8, 0)
-    editForm.value.hours = Math.round(normalHours * 2) / 2
-    editForm.value.overtime_hours = Math.round(overtime * 2) / 2
-  }
-)
 
 function formatDate(d: any) {
   if (!d) return null
@@ -448,6 +311,241 @@ function formatTime(t: any) {
 
   return null
 }
+
+function doubleDigitTime(t) {
+  if (!t) return null
+
+  if (typeof t === 'string') {
+    if (/^\d{2}:\d{2}(:\d{2})?$/.test(t)) {
+      return t.slice(0, 5) // always return HH:MM
+    }
+    return null
+  }
+
+  if (t instanceof Date) {
+    const hh = String(t.getHours()).padStart(2, '0')
+    const mm = String(t.getMinutes()).padStart(2, '0')
+    return `${hh}:${mm}`
+  }
+
+  return null
+}
+
+// 辅助函数：字符串转 Date（时分）
+function timeStrToDate(str: string | undefined) {
+  if (!str) return null
+  const [h, m] = str.split(':').map(Number)
+  const d = new Date()
+  d.setHours(h, m, 0, 0)
+  return d
+}
+
+function toDate(timeStr: Date) {
+  let str: string
+  str = ''
+  if (typeof timeStr !== 'string') {
+    // 如果传进来的是 Date 对象，就格式化成字符串再解析
+    if (timeStr instanceof Date) {
+      const h = timeStr.getHours().toString().padStart(2, '0')
+      const m = timeStr.getMinutes().toString().padStart(2, '0')
+      str = `${h}:${m}`
+    } else {
+      // 不是字符串也不是 Date，返回 null 或抛错
+      return null
+    }
+  }
+  const [h, m] = str.split(':')
+  const d = new Date()
+  d.setHours(Number(h), Number(m), 0, 0)
+  return d
+}
+// ===============================
+// WORKERS & ANNUAL REVIEW FETCH
+// ===============================
+async function fetchWorkers() {
+  try {
+    const res = await fetch(`${API_BASE}/workers`)
+    if (!res.ok) throw new Error('Network error fetching workers')
+    workers.value = await res.json()
+    console.log('Workers loaded:', workers.value)
+  } catch (error) {
+    console.error(error)
+  }
+}
+
+async function fetchAnnualReview(year: number) {
+  try {
+    const res = await fetch(`${API_BASE}/annual_review?year=${year}`)
+    if (!res.ok) throw new Error('Network error fetching annual review')
+    annualReview.value = await res.json()
+  } catch (error) {
+    console.error(error)
+  }
+}
+
+async function refreshAllData() {
+  await Promise.all([
+    fetchWorkers(),
+    fetchAnnualReview(new Date().getFullYear()),
+    fetchUnpaidForAll()
+  ])
+}
+// ===============================
+// ATTENDANCE MANAGEMENT
+// ===============================
+function addName() {
+  const name = nameInput.value.trim()
+  console.log('Trying to add:', name)
+  if (name && !form.names.includes(name)) {
+    form.names.push(name as string)
+    console.log('Name added:', name)
+  }
+  nameInput.value = ''
+  console.log('Input cleared, current names:', form.names)
+}
+
+async function submitEntry() {
+  message.value = ''
+  isError.value = false
+
+  if (!form.date || !form.loginTime || !form.logoutTime || form.names.length === 0) {
+    message.value = 'Please fill out all fields and add at least one name.'
+    isError.value = true
+    return
+  }
+
+  const loginDateTime = `${form.loginTime}`
+  const logoutDateTime = `${form.logoutTime}`
+
+  let allSuccessful = true
+
+  for (const name of form.names) {
+    try {
+      const response = await fetch(`${API_BASE}/add_entry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          date: formatDate(form.date),
+          login_time: doubleDigitTime(loginDateTime),
+          logout_time: doubleDigitTime(logoutDateTime),
+          paid: form.paid,
+          hours: form.hours,
+          overtime_hours:form.overtime_hours
+        }),
+      })
+
+      const result = await response.json()
+      if (!response.ok) {
+        allSuccessful = false
+        console.error(`Error for ${name}:`, result.error || 'Failed to add entry')
+      }
+    } catch (err) {
+      allSuccessful = false
+      if (err instanceof Error) {
+        console.error(`Network error for ${name}:`, err.message)
+      } else {
+        console.error(`Network error for ${name}:`, err)
+      }
+    }
+  }
+
+  if (allSuccessful) {
+    message.value = 'All entries added successfully!'
+    isError.value = false
+    form.names = []
+    form.date = getTodayDateEST()
+    form.loginTime = ''
+    form.logoutTime = ''
+    form.paid = false
+    nameInput.value = ''
+    refreshAllData()
+    fetchUnpaidForAll() 
+  } else {
+    message.value = 'Some entries failed to add. Check console for details.'
+    isError.value = true
+  }
+}
+
+const fetchUnpaidForAll = async () => {
+  unpaidByWorker.value = {}
+
+  for (const worker of workers.value) {
+    console.log('Fetching unpaid for:', worker)
+    try {
+      const res = await axios.get(`${API_BASE}/attendance/unpaid?name=${encodeURIComponent(worker)}`)
+      console.log(`Response for ${worker}:`, res.data)
+      unpaidByWorker.value[worker] = res.data.sort(
+        (a: { date: string }, b: { date: string }) =>
+          new Date(a.date).getTime() - new Date(b.date).getTime()
+      )
+    } catch (err) {
+      console.error(`Error fetching unpaid for ${worker}:`, err)
+      unpaidByWorker.value[worker] = []
+    }
+  }
+}
+
+async function deleteEntry(entryId: number) {
+  if (!confirm('Are you sure you want to delete this entry?')) return
+  try {
+    const res = await fetch(`${API_BASE}/delete_entry/${entryId}`, {
+      method: 'DELETE'
+    })
+    refreshAllData()
+    fetchUnpaidForAll() 
+    if (res.ok) {
+      // Find which worker has this entry
+      for (const worker in unpaidByWorker.value) {
+        const entries = unpaidByWorker.value[worker]
+        if (Array.isArray(entries)) {
+          unpaidByWorker.value[worker] = entries.filter(e => e.id !== entryId)
+        }
+      }
+      ElMessage.success('Entry deleted successfully')
+    } else {
+      ElMessage.error('Failed to delete entry')
+    }
+  } catch (err) {
+    console.error(err)
+    ElMessage.error('Error deleting entry')
+  }
+}
+// ===============================
+// EDIT ATTENDANCE ENTRY
+// ===============================
+watch(// 计算工时
+  () => [editForm.value.login_time, editForm.value.logout_time],
+  ([loginTime, logoutTime]) => {
+    if (!loginTime || !logoutTime) {
+      editForm.value.hours = 0
+      editForm.value.overtime_hours = 0
+      return
+    }
+    const diffMs = logoutTime.getTime() - loginTime.getTime()
+    if (diffMs <= 0) {
+      editForm.value.hours = 0
+      editForm.value.overtime_hours = 0
+      return
+    }
+    const diffHours = diffMs / (1000 * 60 * 60)
+    const normalHours = Math.min(diffHours, 8)
+    const overtime = Math.max(diffHours - 8, 0)
+    editForm.value.hours = Math.round(normalHours * 2) / 2
+    editForm.value.overtime_hours = Math.round(overtime * 2) / 2
+  }
+)
+
+watch(
+  () => [editForm.value.login_time, editForm.value.logout_time],
+  ([newLogin, newLogout]) => {
+    const loginDate = toDate(newLogin)
+    const logoutDate = toDate(newLogout)
+    const { hours, overtime_hours } = calculateHours(loginDate, logoutDate)
+    editForm.value.hours = hours
+    editForm.value.overtime_hours = overtime_hours
+  }
+)
 
 async function saveEdit() {
   try {
@@ -479,36 +577,39 @@ async function saveEdit() {
     ElMessage.error('Error updating entry')
   }
 }
-function toDate(timeStr) {
-  if (typeof timeStr !== 'string') {
-    // 如果传进来的是 Date 对象，就格式化成字符串再解析
-    if (timeStr instanceof Date) {
-      const h = timeStr.getHours().toString().padStart(2, '0')
-      const m = timeStr.getMinutes().toString().padStart(2, '0')
-      timeStr = `${h}:${m}`
-    } else {
-      // 不是字符串也不是 Date，返回 null 或抛错
-      return null
-    }
-  }
-  const [h, m] = timeStr.split(':')
-  const d = new Date()
-  d.setHours(Number(h), Number(m), 0, 0)
-  return d
-}
 
-watch(
-  () => [editForm.value.login_time, editForm.value.logout_time],
-  ([newLogin, newLogout]) => {
-    const loginDate = toDate(newLogin)
-    const logoutDate = toDate(newLogout)
-    const { hours, overtime_hours } = calculateHours(loginDate, logoutDate)
-    editForm.value.hours = hours
-    editForm.value.overtime_hours = overtime_hours
-  }
-)
+// 打开编辑时调用，确保时间字段是 Date 对象
+function openEdit(data: any) {
+  editForm.value = { ...data }
+  editForm.value.login_time = timeStrToDate(data.login_time)
+  editForm.value.logout_time = timeStrToDate(data.logout_time)
+  editDialogVisible.value = true
+}
+// ===============================
+// TABLE UTILITIES
+// ===============================
+function summaryMethod({ columns, data }: { columns: any[]; data: any[] })  {
+  const sums: string[] = []
+  columns.forEach((column, index) => {
+    if (index === 0) {
+      sums[index] = 'Total'
+      return
+    }
+    if (column.property === 'hours') {
+      sums[index] = data.reduce((sum, row) => sum + (row.hours || 0), 0).toFixed(1)
+    } else if (column.property === 'overtime_hours') {
+      sums[index] = data.reduce((sum, row) => sum + (row.overtime_hours || 0), 0).toFixed(1)
+    } else {
+      sums[index] = ''
+    }
+  })
+  return sums
+}
+// ===============================
+// LIFECYCLE HOOK
+// ===============================
 onMounted(async () => {
   await refreshAllData()  // 先拿 workers 和年度数据
-  await fetchUnpaidForAll()  // 再拿每个人的未付数据
+  await fetchUnpaidForAll()
 })
-</script>
+</script>-->
