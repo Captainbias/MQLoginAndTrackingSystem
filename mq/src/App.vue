@@ -78,13 +78,24 @@
     </el-form>
     <div v-for="worker in workers" :key="worker" style="margin-bottom: 40px;">
       <h3>{{ worker }} — Unpaid Attendance</h3>
+      <el-button
+        type="success"
+        size="small"
+        @click="markSelectedAsPaid"
+        :disabled="multipleSelection.length === 0"
+      >
+        Mark Selected as Paid 
+      </el-button>
       <el-table
+        ref="multipleTableRef"
         :data="unpaidByWorker[worker] || []"
         style="width: 100%"
         border
         show-summary
         :summary-method="summaryMethod"
+        @selection-change="handleSelectionChange"
       >
+        <el-table-column type="selection" width="55" />
         <el-table-column prop="date" label="Date" width="120" />
         <el-table-column prop="login_time" label="Login Time" width="120" />
         <el-table-column prop="logout_time" label="Logout Time" width="120" />
@@ -204,6 +215,40 @@
       </template>
     </el-dialog>
   </div>
+  <el-card shadow="hover">
+    <template #header>
+      <span>近 30 天已支付考勤</span>
+    </template>
+
+    <el-skeleton :loading="loading" animated>
+      <el-collapse>
+        <el-collapse-item
+          v-for="worker in paid_workers"
+          :key="worker.name"
+          :title="worker.name"
+        >
+          <el-table
+            :data="worker.entries"
+            stripe
+            border
+            style="width:100%"
+          >
+            <el-table-column prop="date" label="日期" width="120"/>
+            <el-table-column prop="login_time" label="上班" width="100"/>
+            <el-table-column prop="logout_time" label="下班" width="100"/>
+            <el-table-column prop="hours" label="工时" width="100"/>
+            <el-table-column prop="overtime_hours" label="加班" width="100"/>
+            <el-table-column
+              prop="paid"
+              label="已支付"
+              width="100"
+              :formatter="(row: Entry) => row.paid ? '是' : '否'"
+            />
+          </el-table>
+        </el-collapse-item>
+      </el-collapse>
+    </el-skeleton>
+  </el-card>
 </template>
 
 <script setup lang="ts">
@@ -214,7 +259,7 @@ import 'element-plus/es/components/message/style/css'
 // ===============================
 // CONSTANTS
 // ===============================
-const API_BASE = 'https://captainbias.pythonanywhere.com/'  // <-- Backend base URL
+const API_BASE = 'https://captainbias.pythonanywhere.com'  // <-- Backend base URL
 
 const timeOptions: string[] = []
 for (let hour = 0; hour < 24; hour++) {
@@ -251,7 +296,6 @@ const nameInput = ref('')
 const message = ref('')
 const isError = ref(false)
 const editDialogVisible = ref(false)
-const pastPaid = ref<any>({})
 const editForm = ref<any>({})
 // ===============================
 // UTILITY FUNCTIONS
@@ -387,10 +431,9 @@ async function refreshAllData() {
   await Promise.all([
     fetchWorkers(),
     fetchAnnualReview(new Date().getFullYear()),
-    fetchUnpaidForAll()
   ])
 }
-// ===============================
+// =============================== 
 // ATTENDANCE MANAGEMENT
 // ===============================
 function addName() {
@@ -610,6 +653,94 @@ function summaryMethod({ columns, data }: { columns: any[]; data: any[] })  {
 // ===============================
 onMounted(async () => {
   await refreshAllData()  // 先拿 workers 和年度数据
+  await fetchPaidWorkers() 
   await fetchUnpaidForAll()
 })
+
+interface Entry {
+  id: number
+  name: string
+  date: string
+  login_time: string
+  logout_time: string
+  hours: number
+  overtime_hours: number
+  paid: boolean
+}
+interface Worker {
+  name: string
+  entries: Entry[]
+}
+const paid_workers = ref<Worker[]>([])
+const loading = ref(false)
+async function fetchPaidWorkers() {
+  loading.value = true
+  try {
+    const res = await fetch(`${API_BASE}/paid_workers`)
+    if (!res.ok) throw new Error('Failed to fetch workers')
+    const names: string[] = await res.json()
+
+    // For each worker, fetch paid entries
+    const workersWithEntries: Worker[] = []
+    for (const name of names) {
+      try {
+        const res2 = await fetch(`${API_BASE}/attendance/paid?name=${encodeURIComponent(name)}`)
+        const entries: Entry[] = res2.ok ? await res2.json() : []
+        workersWithEntries.push({ name, entries })
+      } catch (err) {
+        console.error('Failed to fetch entries for', name, err)
+        workersWithEntries.push({ name, entries: [] })
+      }
+    }
+
+    paid_workers.value = workersWithEntries
+    console.log('Loaded workers with entries:', paid_workers.value)
+  } catch (err) {
+    console.error(err)
+  } finally {
+    loading.value = false
+  }
+}
+
+const multipleTableRef = ref(null)
+const multipleSelection = ref([])
+
+function handleSelectionChange(val) {
+  multipleSelection.value = val
+  console.log("Selected rows:", multipleSelection.value)
+}
+
+async function markSelectedAsPaid() {
+  for (const row of multipleSelection.value) {
+    row.paid = true // change locally first
+
+    try {
+      const res = await fetch(`${API_BASE}/update_entry/${row.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: row.name,
+          date: row.date,                   // must match '%Y-%m-%d'
+          login_time: row.login_time,       // e.g. "09:00"
+          logout_time: row.logout_time,     // e.g. "17:30"
+          hours: row.hours,
+          overtime_hours: row.overtime_hours,
+          paid: row.paid
+        })
+      })
+
+      if (!res.ok) {
+        console.error("Failed to update entry:", row.id, await res.text())
+      }
+    } catch (err) {
+      console.error("Network error updating entry:", row.id, err)
+    }
+  }
+
+  // after updates, refresh UI
+  await refreshAllData()
+  await fetchUnpaidForAll()
+  multipleTableRef.value.clearSelection()
+}
+
 </script>-->
