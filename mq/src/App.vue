@@ -1,8 +1,12 @@
 <template>
   <div>
+    
+    <!-- ============================= -->
+    <!-- 1. Attendance Entry Form      -->
+    <!-- ============================= -->
     <h2>Attendance Records</h2>
     <el-form :model="form" @submit.native.prevent="submitEntry" label-width="120px" style="max-width: 400px;">
-      <!-- Names List --> 
+      <!-- Names Input (with tag list + autocomplete) -->
       <el-form-item label="Names">
         <el-tag
           v-for="(n, index) in form.names"
@@ -12,8 +16,9 @@
           style="margin-top: 8px;"
         >
           {{ n }}
-        </el-tag><!-- fix unaligned-->
+        </el-tag>
 
+        <!-- Input for adding a new name -->
         <el-input
           v-model="nameInput"
           placeholder="Type a name and press Enter"
@@ -26,16 +31,17 @@
           </template>
         </el-input>
 
+        <!-- Autocomplete name suggestions -->
         <datalist id="worker-list">
           <option
-            v-for="worker in workers"
+            v-for="worker in master_worker_list"
             :key="worker"
             :value="worker"
           />
         </datalist>
       </el-form-item>
 
-      <!-- Date -->
+      <!-- Date Picker -->
       <el-form-item label="Date" required>
       <el-date-picker
         v-model="form.date"
@@ -46,7 +52,7 @@
       />
       </el-form-item>
 
-      <!-- Login Time -->
+      <!-- Login Time Selector -->
       <el-form-item label="Login Time" required>
         <el-select v-model="form.loginTime" placeholder="Select login time" style="width: 100%;">
           <el-option
@@ -58,7 +64,7 @@
         </el-select>
       </el-form-item>
 
-      <!-- Logout Time -->
+      <!-- Logout Time Selector -->
       <el-form-item label="Logout Time" required>
         <el-select v-model="form.logoutTime" placeholder="Select logout time" style="width: 100%;">
           <el-option
@@ -72,12 +78,25 @@
 
       <!-- Submit Button -->
       <el-form-item>
-        <el-button type="primary" native-type="submit">Add Entry</el-button>
+        <el-button type="primary" @click="submitEntry">Add Entry</el-button>
       </el-form-item>
-
     </el-form>
+
+    <el-alert
+      v-if="message"
+      :title="message"
+      :type="isError ? 'error' : 'success'"
+      show-icon
+      closable
+      style="margin-bottom: 16px;"
+    />
+
+    <!-- ============================= -->
+    <!-- 2. Unpaid Attendance Records  -->
+    <!-- ============================= -->
     <div v-for="worker in workers" :key="worker" style="margin-bottom: 40px;">
       <h3>{{ worker }} — Unpaid Attendance</h3>
+      <!-- Bulk pay button -->
       <el-button
         type="success"
         size="small"
@@ -86,6 +105,8 @@
       >
         Mark Selected as Paid 
       </el-button>
+
+      <!-- Table of unpaid entries -->
       <el-table
         ref="multipleTableRef"
         :data="unpaidByWorker[worker] || []"
@@ -107,6 +128,7 @@
           width="100"
           :formatter="paidFormatter"
         />
+        <!-- Row actions: edit / delete -->
         <el-table-column label="Actions" width="160">
           <template #default="{ row }">
             <div style="display: flex; gap: 8px; align-items: center;">
@@ -118,7 +140,9 @@
       </el-table>
     </div>
 
-    <!-- Edit Dialog -->
+    <!-- ============================= -->
+    <!-- 3. Edit Attendance Dialog     -->
+    <!-- ============================= -->
     <el-dialog v-model="editDialogVisible" title="Edit Attendance Entry" width="500px">
       <el-form :model="editForm" label-width="140px">
         <el-form-item label="Date">
@@ -166,6 +190,9 @@
       </template>
     </el-dialog>
   </div>
+  <!-- ============================= -->
+  <!-- 5. Past Paid Records (last 30 days)-->
+  <!-- ============================= -->
   <div>
     <h2>Past Records</h2>
     <el-dialog v-model="editDialogVisible" title="Edit Attendance Entry" width="500px">
@@ -270,6 +297,7 @@ for (let hour = 0; hour < 24; hour++) {
 // ===============================
 // STATE VARIABLES
 // ===============================
+const master_worker_list = ref([])
 const workers = ref([])
 const annualReview = ref({})
 const unpaidByWorker = ref<Record<string, any[]>>({})// unpaidByWorker will be an object: { Alice: [], Bob: [], Charlie: [] }
@@ -408,10 +436,21 @@ function toDate(timeStr: Date) {
 // ===============================
 async function fetchWorkers() {
   try {
-    const res = await fetch(`${API_BASE}/workers`)
+    const res = await fetch(`${API_BASE}/unpaid_workers`)
     if (!res.ok) throw new Error('Network error fetching workers')
     workers.value = await res.json()
     console.log('Workers loaded:', workers.value)
+  } catch (error) {
+    console.error(error)
+  }
+}
+
+async function fetchAllWorkers() {
+  try {
+    const res = await fetch(`${API_BASE}/all_workers`)
+    if (!res.ok) throw new Error('Network error fetching workers')
+    master_worker_list.value = await res.json()
+    console.log('Workers loaded:', master_worker_list.value)
   } catch (error) {
     console.error(error)
   }
@@ -448,10 +487,12 @@ function addName() {
 }
 
 async function submitEntry() {
+  console.log("submitEntry called");
   message.value = ''
   isError.value = false
 
   if (!form.date || !form.loginTime || !form.logoutTime || form.names.length === 0) {
+    console.log("Validation failed: missing required fields");
     message.value = 'Please fill out all fields and add at least one name.'
     isError.value = true
     return
@@ -461,8 +502,10 @@ async function submitEntry() {
   const logoutDateTime = `${form.logoutTime}`
 
   let allSuccessful = true
+  let errorMessages = [] // collect all error messages
 
   for (const name of form.names) {
+    console.log(`Processing entry for worker: ${name}`);
     try {
       const response = await fetch(`${API_BASE}/add_entry`, {
         method: 'POST',
@@ -477,22 +520,26 @@ async function submitEntry() {
           overtime_hours:form.overtime_hours
         }),
       })
+      console.log(`Received response for ${name}:`, response);
 
       const result = await response.json()
+      console.log(`Parsed JSON for ${name}:`, result);
       if (!response.ok) {
+        console.log(`Backend returned error for ${name}:`, result.error);
         allSuccessful = false
-        console.error(`Error for ${name}:`, result.error || 'Failed to add entry')
+        const errMsg = result.error || `Failed to add entry for ${name}`
+        errorMessages.push(`${name}: ${errMsg}`)
+        throw new Error(result.error || "Failed to add entry")
       }
+      console.log(`Entry added successfully for ${name}`);
     } catch (err) {
       allSuccessful = false
-      if (err instanceof Error) {
-        console.error(`Network error for ${name}:`, err.message)
-      } else {
-        console.error(`Network error for ${name}:`, err)
-      }
+      const errMsg = err instanceof Error ? err.message : String(err)
+      console.log(`Fetch error for ${name}:`, errMsg)
+      errorMessages.push(`${name}: ${errMsg}`)
     }
   }
-
+  console.log("All entries processed. Success =", allSuccessful);
   if (allSuccessful) {
     message.value = 'All entries added successfully!'
     isError.value = false
@@ -505,7 +552,13 @@ async function submitEntry() {
     refreshAllData()
     fetchUnpaidForAll() 
   } else {
-    message.value = 'Some entries failed to add. Check console for details.'
+    console.log("Some entries failed:", errorMessages)
+    const duplicateError = errorMessages.find(err => err.toLowerCase().includes("already exists"))
+    if (duplicateError) {
+      message.value = "⚠️ An entry for this date already exists. Please edit or delete the old one first."
+    } else {
+      message.value = `❌ Some entries failed:\n${errorMessages.join("\n")}`
+    }
     isError.value = true
   }
 }
@@ -655,6 +708,7 @@ onMounted(async () => {
   await refreshAllData()  // 先拿 workers 和年度数据
   await fetchPaidWorkers() 
   await fetchUnpaidForAll()
+  await fetchAllWorkers()
 })
 
 interface Entry {
@@ -742,5 +796,4 @@ async function markSelectedAsPaid() {
   await fetchUnpaidForAll()
   multipleTableRef.value.clearSelection()
 }
-
 </script>-->
